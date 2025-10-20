@@ -1,0 +1,69 @@
+# Análisis de tráfico vehicular usando Apache Spark (Batch)
+# Autor: Anderson Tulcan
+# Dataset: TrafficVolumeData.csv
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, avg, hour, dayofweek, count, when, avg
+
+# 1 Crear sesión de Spark
+spark = SparkSession.builder \
+    .appName("Analisis_Traffic_Volume_Bogota") \
+    .getOrCreate()
+
+print("\n Sesión de Spark iniciada correctamente.\n")
+
+# 2 Cargar conjunto de datos
+ruta_datos = "/home/vboxuser/Descargas/TrafficVolumeData.csv"
+df = spark.read.csv(ruta_datos, header=True, inferSchema=True)
+
+print("=== MUESTRA DE DATOS ===")
+df.show(5)
+print("Total de registros:", df.count())
+
+# 3 Validación de calidad de datos y limpieza
+# Contar valores nulos por columna
+print("\n=== Verificación de valores nulos ===")
+df.select([count(when(col(c).isNull(), c)).alias(c) for c in df.columns]).show()
+
+# Eliminar registros con valores nulos en columnas clave
+df_clean = df.dropna(subset=["traffic_volume", "date_time"])
+print("Registros después de limpieza:", df_clean.count())
+
+# 4 Detección y manejo de valores atípicos 
+# Filtrar volúmenes de tráfico fuera de un rango razonable (0 a 7000)
+df_valid = df_clean.filter((col("traffic_volume") >= 0) & (col("traffic_volume") <= 7000))
+print("Registros después de eliminar valores atípicos:", df_valid.count())
+
+# 5 Transformaciones
+# Agregar columnas: hora del día y día de la semana
+df_transformed = df_valid.withColumn("hora", hour(col("date_time"))) \
+                         .withColumn("dia_semana", dayofweek(col("date_time")))
+
+# 6 Análisis exploratorio 
+print("\n=== Promedio de tráfico por hora ===")
+trafico_hora = df_transformed.groupBy("hora").agg(avg("traffic_volume").alias("promedio_trafico"))
+trafico_hora.show(10)
+
+print("\n=== Promedio de tráfico por día de la semana ===")
+trafico_dia = df_transformed.groupBy("dia_semana").agg(avg("traffic_volume").alias("promedio_trafico"))
+trafico_dia.show()
+
+if "weather_main" in df_transformed.columns:
+    print("\n=== Promedio de tráfico por condición climática ===")
+    trafico_clima = df_transformed.groupBy("weather_main").agg(avg("traffic_volume").alias("promedio_trafico")) \
+                                 .orderBy(col("promedio_trafico").desc())
+    trafico_clima.show(10)
+
+# 7 Guardar resultados optimizados en formato Parquet con particionamiento
+ruta_salida = "/home/vboxuser/Descargas/resultados_spark/"
+trafico_hora.repartition(4).write.mode("overwrite").parquet(ruta_salida + "trafico_por_hora")
+trafico_dia.repartition(4).write.mode("overwrite").parquet(ruta_salida + "trafico_por_dia")
+
+if "weather_main" in df_transformed.columns:
+    trafico_clima.repartition(4).write.mode("overwrite").parquet(ruta_salida + "trafico_por_clima")
+
+print("\n Resultados almacenados correctamente en:", ruta_salida)
+
+# 8 Finalizar sesión
+spark.stop()
+print("\n Proceso finalizado correctamente.\n")
